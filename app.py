@@ -191,7 +191,7 @@ def generate_json_ld(data):
     # Construct the JSON-LD dictionary
     schema = {
         "@context": "https://schema.org",
-        "@type": "Interview",
+        "@type": ["BlogPosting", "Interview"],
         "mainEntityOfPage": {
             "@type": "WebPage",
             "@id": data.get('url', '')
