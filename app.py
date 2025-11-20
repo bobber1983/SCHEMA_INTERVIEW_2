@@ -5,6 +5,7 @@ import google.generativeai as genai
 import datetime
 import os
 from dateutil import parser
+from urllib.parse import urljoin, urlparse
 
 # --- Configuration & Setup ---
 st.set_page_config(page_title="JSON-LD Schema Generator", layout="wide")
@@ -42,6 +43,25 @@ def clean_html_for_ai(soup):
     # Actually, passing the raw (cleaned) HTML of the article body is often best for extraction.
     return str(content)[:30000] # Limit to 30k chars to be safe with limits
 
+def validate_and_fix_url(url, base_url):
+    """
+    Validates and fixes URLs to ensure they are absolute.
+    """
+    if not url:
+        return ""
+    
+    # Check if it's a local file path (common in saved pages)
+    if "_files/" in url or url.startswith("file://"):
+        return "" # Discard local paths as we can't reliably reverse them without more info
+        
+    # Fix relative URLs
+    if not url.startswith(('http://', 'https://')):
+        if base_url:
+            return urljoin(base_url, url)
+        return "" # Cannot fix without base_url
+        
+    return url
+
 def extract_heuristics(soup):
     """
     Phase 1: Surgical Extraction of metadata available in DOM.
@@ -49,9 +69,11 @@ def extract_heuristics(soup):
     data = {}
     
     # 1. Basic Meta Tags
+    data['url'] = get_safe_attr(soup, 'link[rel="canonical"]', 'href') or get_safe_attr(soup, 'meta[property="og:url"]', 'content')
+    base_url = data['url'] # Use this as base for resolving relative links
+    
     data['headline'] = get_safe_attr(soup, 'meta[property="og:title"]', 'content') or soup.title.string
     data['description'] = get_safe_attr(soup, 'meta[name="description"]', 'content') or get_safe_attr(soup, 'meta[property="og:description"]', 'content')
-    data['url'] = get_safe_attr(soup, 'link[rel="canonical"]', 'href') or get_safe_attr(soup, 'meta[property="og:url"]', 'content')
     
     # 2. Dates
     # Try og:updated_time first, then article:published_time
@@ -62,7 +84,9 @@ def extract_heuristics(soup):
         data['datePublished'] = data['dateModified'] # Fallback
         
     # 3. Image
-    data['image_url'] = get_safe_attr(soup, 'meta[property="og:image"]', 'content')
+    raw_image = get_safe_attr(soup, 'meta[property="og:image"]', 'content')
+    data['image_url'] = validate_and_fix_url(raw_image, base_url)
+    
     data['image_width'] = get_safe_attr(soup, 'meta[property="og:image:width"]', 'content')
     data['image_height'] = get_safe_attr(soup, 'meta[property="og:image:height"]', 'content')
     
@@ -71,8 +95,19 @@ def extract_heuristics(soup):
     audio_figure = soup.select_one('figure.wp-block-audio')
     if audio_figure:
         audio_tag = audio_figure.find('audio')
+        raw_audio = ""
+        
+        # Try audio tag src
         if audio_tag and audio_tag.get('src'):
-            data['audio_url'] = audio_tag['src']
+            raw_audio = audio_tag['src']
+            
+        # If invalid or missing, try anchor tag inside figure (often a download link)
+        if not raw_audio or "_files/" in raw_audio:
+             link_tag = audio_figure.find('a')
+             if link_tag and link_tag.get('href'):
+                 raw_audio = link_tag['href']
+        
+        data['audio_url'] = validate_and_fix_url(raw_audio, base_url)
             
         caption = audio_figure.find('figcaption')
         if caption:
