@@ -236,7 +236,8 @@ def generate_json_ld(data):
              "sameAs": interviewee.get('socialLinks', [])
         }
 
-    return json.dumps(schema, indent=4)
+    json_content = json.dumps(schema, indent=4)
+    return f'<script type="application/ld+json">\n{json_content}\n</script>'
 
 
 # --- Main App UI ---
