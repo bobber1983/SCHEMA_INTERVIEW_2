@@ -1,0 +1,166 @@
+--------------------------------------------------
+TEMPLATE DA USARE (E CHE DEVI COMPILARE)
+--------------------------------------------------
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": [
+    "BlogPosting",
+    "Article",
+    "Interview"
+  ],
+
+  "@id": "{{ARTICOLO_URL_CANONICO}}#article",
+  "mainEntityOfPage": {
+    "@type": "WebPage",
+    "@id": "{{ARTICOLO_URL_CANONICO}}"
+  },
+
+  "headline": "{{ARTICOLO_TITOLO}}",
+  "alternativeHeadline": "{{ARTICOLO_SOTTOTITOLO_O_TITOLO_ESTESO}}",
+  "description": "{{ARTICOLO_DESCRIZIONE}}",
+  "inLanguage": "it-IT",
+
+  "datePublished": "{{ARTICOLO_DATA_PUBBLICAZIONE_ISO8601_ES_2025-01-05T08:00:00+08:00",
+}}",
+  "dateModified": "{{ARTICOLO_DATA_MODIFICA_ISO8601}}",
+
+  "articleSection": "{{ARTICOLO_SEZIONE_O_RUBRICA}}",
+
+  "keywords": {{ARTICOLO_KEYWORDS_ARRAY}},
+
+  "about": {{ARTICOLO_ABOUT_ARRAY}},
+
+  "isPartOf": {
+    "@type": "CreativeWorkSeries",
+    "@id": "{{RUBRICA_URL_ARCHIVIO}}#series",
+    "name": "{{RUBRICA_NOME}}",
+    "url": "{{RUBRICA_URL_ARCHIVIO}}",
+    "description": "{{RUBRICA_DESCRIZIONE}}"
+  },
+
+  "image": {
+    "@type": "ImageObject",
+    "url": "{{IMMAGINE_COPERTINA_URL}}",
+    "width": {{IMMAGINE_COPERTINA_LARGHEZZA}},
+    "height": {{IMMAGINE_COPERTINA_ALTEZZA}}
+  },
+
+  "audio": {
+    "@type": "AudioObject",
+    "name": "{{AUDIO_NOME_O_TITOLO}}",
+    "description": "{{AUDIO_DESCRIZIONE}}",
+    "contentUrl": "{{AUDIO_URL}}",
+    "encodingFormat": "audio/mpeg"
+  },
+
+  "author": {
+    "@type": "Person",
+    "url": "https://www.roberto-serra.com/chi-sono-roberto-serra/",
+    "name": "Roberto Serra",
+    "@id": "https://www.roberto-serra.com/chi-sono-roberto-serra/#person"
+  },
+
+  "interviewer": {
+    "@type": "Person",
+    "url": "https://www.roberto-serra.com/chi-sono-roberto-serra/",
+    "name": "Roberto Serra",
+    "@id": "https://www.roberto-serra.com/chi-sono-roberto-serra/#person"
+  },
+
+  "interviewee": {
+    "@type": "Person",
+    "@id": "{{INTERVISTATO_ENTITY_URL}}",
+    "name": "{{INTERVISTATO_NOME}}",
+    "description": "{{INTERVISTATO_DESCRIZIONE_AUTOREVOLE}}",
+    "jobTitle": "{{INTERVISTATO_JOB_TITLE}}",
+    "affiliation": {
+      "@type": "Organization",
+      "name": "{{INTERVISTATO_AFFILIAZIONE_NOME_ORGANIZZAZIONE}}"
+    },
+    "image": "{{INTERVISTATO_IMMAGINE_URL}}",
+    "sameAs": {{INTERVISTATO_SAMEAS_ARRAY}}
+  },
+
+  "publisher": {
+    "@type": "Organization",
+    "name": "Roberto Serra",
+    "url": "https://www.roberto-serra.com/",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "https://www.roberto-serra.com/wp-content/uploads/2025/11/logo-roberto-serra.png",
+      "width": 500,
+      "height": 132
+    }
+  },
+
+  "articleBody": "{{ARTICOLO_TESTO_PLAIN}}"
+}
+</script>
+
+--------------------------------------------------
+REGOLE DI COMPILAZIONE
+--------------------------------------------------
+
+1) SOSTITUZIONE PLACEHOLDER
+   - Sostituisci OGNI placeholder {{NOME_PLACEHOLDER}} con un valore specifico.
+   - NON lasciare placeholder nel risultato finale.
+   - Mantieni la struttura del JSON invariata, tranne nei casi sotto.
+
+2) CAMPI DERIVATI DAL TESTO / METADATI
+   - {{ARTICOLO_TITOLO}}: dal titolo principale dell’intervista.
+   - {{ARTICOLO_SOTTOTITOLO_O_TITOLO_ESTESO}}: da sottotitolo / occhiello / seconda riga di titolo (se presente); altrimenti una estensione descrittiva del titolo.
+   - {{ARTICOLO_DESCRIZIONE}}: breve riassunto dell’intervista (1–2 frasi).
+   - {{ARTICOLO_DATA_PUBBLICAZIONE_ISO8601}} e {{ARTICOLO_DATA_MODIFICA_ISO8601}}: prese dai metadati; formato ISO8601.
+   - {{ARTICOLO_SEZIONE_O_RUBRICA}}: nome rubrica o categoria (es. “SEO Confidential”).
+   - {{ARTICOLO_TESTO_PLAIN}}: versione testuale dell’intervista, senza HTML (puoi riassumere se troppo lunga).
+
+3) KEYWORDS E ABOUT
+   - {{ARTICOLO_KEYWORDS_ARRAY}} deve diventare un ARRAY JSON di stringhe, es:
+     ["SEO", "intelligenza artificiale", "internet morto", "blanding", "NOME INTERVISTATO", "Roberto Serra"].
+   - {{ARTICOLO_ABOUT_ARRAY}} deve diventare un ARRAY JSON di oggetti Thing, es:
+     [
+       { "@type": "Thing", "name": "SEO" },
+       { "@type": "Thing", "name": "Intelligenza Artificiale" },
+       { "@type": "Thing", "name": "Internet morto" }
+     ].
+
+4) RUBRICA (isPartOf)
+   - Usa i metadati o inferisci dal testo il nome della rubrica (es. “SEO Confidential”).
+   - {{RUBRICA_URL_ARCHIVIO}}: URL della pagina di archivio della rubrica "https://www.roberto-serra.com/news-category/interviste/";
+   - {{RUBRICA_DESCRIZIONE}}: una o due frasi che descrivono la rubrica.
+
+5) IMMAGINE DI COPERTINA
+   - {{IMMAGINE_COPERTINA_URL}}: URL dell’immagine di copertina dai metadati o dal markup.
+   - {{IMMAGINE_COPERTINA_LARGHEZZA}} e {{IMMAGINE_COPERTINA_ALTEZZA}}: se il dato non è disponibile, usa valori standard (es. 1200 e 628).
+
+6) AUDIO (BLOCCO "audio")
+   - Se nel testo o nel markup NON trovi alcun riferimento a file audio / player:
+     → RIMUOVI COMPLETAMENTE la proprietà "audio" dal JSON.
+   - Se è presente un audio:
+     - {{AUDIO_URL}}: URL del file audio.
+     - {{AUDIO_NOME_O_TITOLO}} e {{AUDIO_DESCRIZIONE}}: ricavati dal contesto (es. “Sintesi audio dell’intervista a …”).
+
+7) INTERVISTATO (interviewee)
+   - {{INTERVISTATO_NOME}}: nome e cognome dell’ospite.
+   - {{INTERVISTATO_DESCRIZIONE_AUTOREVOLE}}: breve descrizione che metta in luce esperienza, risultati, conferenze, pubblicazioni, settori.
+   - {{INTERVISTATO_JOB_TITLE}}: ruolo principale (es. “Consulente SEO internazionale”).
+   - {{INTERVISTATO_AFFILIAZIONE_NOME_ORGANIZZAZIONE}}: nome dell’agenzia/azienda con cui è principalmente associato (se presente, altrimenti lascialo generico ma plausibile).
+   - {{INTERVISTATO_IMMAGINE_URL}}: URL della foto/ritratto ufficiale se presente; altrimenti ometti l’intero campo "image".
+   - {{INTERVISTATO_ENTITY_URL}}: un URL stabile per rappresentare la persona (es. l’URL dell’articolo con #person o una pagina autore dedicata).
+   - {{INTERVISTATO_SAMEAS_ARRAY}}: deve diventare un ARRAY JSON di URL verso profili autorevoli (LinkedIn, sito personale, Twitter/X, ecc.). Se non ne trovi, usa un array vuoto: [].
+
+8) URL ARTICOLO
+   - {{ARTICOLO_URL_CANONICO}}: URL canonica della pagina dell’intervista (senza hash).
+
+9) SE QUALCOSA NON ESISTE
+   - Se un’informazione è chiaramente assente (es. nessun audio, nessuna immagine specifica, nessun profilo social dell’intervistato):
+     - chiedi all'utente il dato che ti manca enel caso non te lo possa fornire è PREFERIBILE rimuovere la proprietà corrispondente piuttosto che inventare valori fittizi.
+   - NON inserire valori placeholder tipo "ND" o "sconosciuto": o compili con un valore sensato, o togli del tutto il campo.
+
+10) OUTPUT
+   - Restituisci SOLO lo script finale completo:
+     <script type="application/ld+json"> ... </script>
+   - Il contenuto deve essere JSON valido.
+   - Nessun commento, nessuna spiegazione fuori dallo script.
