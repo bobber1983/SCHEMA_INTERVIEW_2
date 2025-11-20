@@ -78,6 +78,10 @@ def extract_heuristics(soup):
         if caption:
             data['audio_description'] = caption.get_text(strip=True)
     
+    # Fallback for audio_description if not found
+    if not data.get('audio_description') and data.get('description'):
+        data['audio_description'] = data['description']
+
     return data
 
 def extract_with_ai(html_content, api_key, model_name, heuristic_data):
@@ -152,7 +156,7 @@ def generate_json_ld(data):
     # Construct the JSON-LD dictionary
     schema = {
         "@context": "https://schema.org",
-        "@type": ["BlogPosting", "Article", "Interview"],
+        "@type": "Interview",
         "mainEntityOfPage": {
             "@type": "WebPage",
             "@id": data.get('url', '')
@@ -173,9 +177,15 @@ def generate_json_ld(data):
             "url": "https://www.roberto-serra.com/chi-sono-roberto-serra/",
             "@id": "https://www.roberto-serra.com/chi-sono-roberto-serra/#person"
         },
+        "interviewer": {
+            "@type": "Person",
+            "name": "Roberto Serra",
+            "url": "https://www.roberto-serra.com/chi-sono-roberto-serra/",
+            "@id": "https://www.roberto-serra.com/chi-sono-roberto-serra/#person"
+        },
         "publisher": {
             "@type": "Organization",
-            "name": "Roberto Serra",
+            "name": "Roberto Serra SEO Agency",
             "url": "https://www.roberto-serra.com/",
             "logo": {
                 "@type": "ImageObject",
@@ -212,23 +222,19 @@ def generate_json_ld(data):
         # Construct a unique ID for the interviewee
         person_id = f"{data.get('url', '')}#person-{interviewee['name'].lower().replace(' ', '-')}"
         
-        schema["mentions"] = [{ # Using mentions or about for the interviewee in the article context
+        schema["interviewee"] = {
              "@type": "Person",
+             "@id": person_id,
              "name": interviewee.get('name'),
+             "description": interviewee.get('bio'),
              "jobTitle": interviewee.get('jobTitle'),
-             "worksFor": {
+             "affiliation": {
                  "@type": "Organization",
                  "name": interviewee.get('company')
              },
-             "description": interviewee.get('bio'),
              "image": interviewee.get('image_url'),
-             "sameAs": interviewee.get('socialLinks', []),
-             "@id": person_id
-        }]
-        # Note: The template used specific keys. Let's try to match the user's template structure if possible.
-        # The user template had {{INTERVISTATO_...}} placeholders.
-        # Standard Schema.org for Interview often puts the interviewee in 'about' or 'mentions' or specific 'interviewee' property if using a specific extension, but 'mentions' type Person is standard for Article.
-        # However, let's stick to valid JSON-LD structure.
+             "sameAs": interviewee.get('socialLinks', [])
+        }
 
     return json.dumps(schema, indent=4)
 
