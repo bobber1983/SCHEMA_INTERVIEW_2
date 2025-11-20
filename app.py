@@ -330,7 +330,16 @@ with st.sidebar:
                     if 'generateContent' in m.supported_generation_methods and "gemini" in m.name:
                         models.append(m.name)
             
-            return sorted(models, reverse=True)
+            # Sort models
+            models = sorted(models, reverse=True)
+            
+            # Prioritize gemini-2.5-pro if available
+            target_model = "models/gemini-2.5-pro"
+            if target_model in models:
+                models.remove(target_model)
+                models.insert(0, target_model)
+            
+            return models
         except Exception as e:
             # st.error(f"Error fetching models: {e}") # Suppress error on startup if key is invalid
             return ["models/gemini-1.5-flash"] 
