@@ -117,6 +117,12 @@ def extract_heuristics(soup):
     if not data.get('audio_description') and data.get('description'):
         data['audio_description'] = data['description']
 
+    # 5. Article body (plain text) for the articleBody property.
+    # Truncated to keep the schema lean; the user can refine it in the form.
+    body_root = soup.find('article') or soup.find('div', class_='entry-content') or soup.body
+    if body_root:
+        data['articleBody'] = body_root.get_text(separator=' ', strip=True)[:5000]
+
     return data
 
 def extract_with_ai(html_content, api_key, model_name, heuristic_data):
@@ -153,7 +159,8 @@ def extract_with_ai(html_content, api_key, model_name, heuristic_data):
             - "image_url": URL of a photo of the interviewee if found in the body (look for img tags near their name).
         5. "mentions": An array of strings listing tools, companies, or people mentioned in the interview (for 'about' schema).
         6. "seriesName": The name of the column/series (e.g., "SEO Confidential").
-        
+        7. "seriesDescription": A one or two sentence description of the column/series (in Italian).
+
         HTML CONTENT:
         {html_content}
         """
@@ -170,108 +177,196 @@ def extract_with_ai(html_content, api_key, model_name, heuristic_data):
         st.error(f"AI Extraction Error: {e}")
         return {}
 
-def generate_json_ld(data):
-    """
-    Generates the final JSON-LD script based on the specific template.
-    """
-    
-    # Prepare keywords array string
-    keywords_json = json.dumps(data.get('keywords', []))
-    
-    # Prepare About array
-    about_list = [{"@type": "Thing", "name": k} for k in data.get('keywords', [])]
-    # Add mentions if available
-    if data.get('mentions'):
-         about_list.extend([{"@type": "Thing", "name": m} for m in data['mentions']])
-    about_json = json.dumps(about_list)
-    
-    # Prepare SameAs array for interviewee
-    same_as_json = json.dumps(data.get('interviewee', {}).get('socialLinks', []))
+# --- Schema constants (single source of truth, mirror schema_instructions.txt) ---
+SERIES_URL = "https://www.roberto-serra.com/news-category/interviste/"
+DEFAULT_SERIES_NAME = "SEO Confidential"
 
-    # Construct the JSON-LD dictionary
+AUTHOR_PERSON = {
+    "@type": "Person",
+    "url": "https://www.roberto-serra.com/chi-sono-roberto-serra/",
+    "name": "Roberto Serra",
+    "@id": "https://www.roberto-serra.com/chi-sono-roberto-serra/#person",
+}
+
+PUBLISHER_ORG = {
+    "@type": "Organization",
+    "name": "Roberto Serra",
+    "url": "https://www.roberto-serra.com/",
+    "logo": {
+        "@type": "ImageObject",
+        "url": "https://www.roberto-serra.com/wp-content/uploads/2025/11/logo-roberto-serra.png",
+        "width": 500,
+        "height": 132,
+    },
+}
+
+# --- Schema helpers ---
+
+def _to_int(value):
+    """Best-effort int conversion; returns None if not convertible."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+def normalize_iso_date(value):
+    """Return an ISO 8601 string if parseable, else the original (validation flags it)."""
+    if not value:
+        return ""
+    try:
+        return parser.parse(value).isoformat()
+    except (ValueError, OverflowError, TypeError):
+        return value
+
+def is_iso_date(value):
+    """True if value is a valid ISO 8601 date/datetime."""
+    if not value:
+        return False
+    try:
+        parser.isoparse(value)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+def prune_empty(obj):
+    """Recursively drop empty values (None, '', [], {}) so the schema never
+    carries blank/placeholder properties (schema_instructions.txt, rule 9)."""
+    empties = (None, "", [], {})
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            pruned = prune_empty(value)
+            if pruned not in empties:
+                out[key] = pruned
+        return out
+    if isinstance(obj, list):
+        return [v for v in (prune_empty(i) for i in obj) if v not in empties]
+    if isinstance(obj, str):
+        return obj.strip()
+    return obj
+
+def validate_schema_data(data):
+    """Return (errors, warnings): human messages for the review panel.
+    Errors block generation; warnings just flag omitted/weak fields."""
+    errors, warnings = [], []
+
+    if not (data.get('headline') or '').strip():
+        errors.append("Manca lo **Headline** (titolo articolo).")
+
+    url = (data.get('url') or '').strip()
+    if not url:
+        errors.append("Manca la **Canonical URL**: senza, @id e mainEntityOfPage restano vuoti.")
+    elif not url.startswith(('http://', 'https://')):
+        errors.append("La **Canonical URL** deve iniziare con http:// o https://.")
+
+    published = (data.get('datePublished') or '').strip()
+    if not published:
+        warnings.append("Manca la **Data di pubblicazione**.")
+    elif not is_iso_date(published):
+        warnings.append("La **Data di pubblicazione** non è in formato ISO 8601 valido.")
+
+    modified = (data.get('dateModified') or '').strip()
+    if modified and not is_iso_date(modified):
+        warnings.append("La **Data di modifica** non è in formato ISO 8601 valido.")
+
+    if not (data.get('image_url') or '').strip():
+        warnings.append("Manca l'**immagine di copertina**: il blocco image verrà omesso.")
+
+    interviewee = data.get('interviewee') or {}
+    if not (interviewee.get('name') or '').strip():
+        warnings.append("Manca il **nome dell'intervistato**: il blocco interviewee verrà omesso.")
+
+    audio_url = (data.get('audio_url') or '').strip()
+    if audio_url and not audio_url.startswith(('http://', 'https://')):
+        warnings.append("L'**Audio URL** non è un URL assoluto valido: il blocco audio verrà omesso.")
+
+    return errors, warnings
+
+def _person_id(url, name):
+    """Stable @id for the interviewee entity."""
+    if not url:
+        return ""
+    slug = name.strip().lower().replace(' ', '-')
+    return f"{url}#person-{slug}"
+
+def generate_json_ld(data):
+    """Build the JSON-LD script mirroring schema_instructions.txt, omitting empty props."""
+    url = (data.get('url') or '').strip()
+
+    keywords = [k.strip() for k in data.get('keywords', []) if (k or '').strip()]
+    about_list = [{"@type": "Thing", "name": k} for k in keywords]
+    about_list += [{"@type": "Thing", "name": (m or '').strip()}
+                   for m in data.get('mentions', []) if (m or '').strip()]
+
+    image = {}
+    if (data.get('image_url') or '').strip():
+        image = {
+            "@type": "ImageObject",
+            "url": data['image_url'].strip(),
+            # Rule 5: default to standard dimensions when unknown.
+            "width": _to_int(data.get('image_width')) or 1200,
+            "height": _to_int(data.get('image_height')) or 628,
+        }
+
+    series_name = (data.get('seriesName') or '').strip() or DEFAULT_SERIES_NAME
+
     schema = {
         "@context": "https://schema.org",
-        "@type": ["BlogPosting", "Interview"],
-        "mainEntityOfPage": {
-            "@type": "WebPage",
-            "@id": data.get('url', '')
-        },
-        "inLanguage": "it-IT",
+        "@type": ["BlogPosting", "Article", "Interview"],
+        "@id": f"{url}#article" if url else "",
+        "mainEntityOfPage": {"@type": "WebPage", "@id": url},
         "headline": data.get('headline', ''),
         "alternativeHeadline": data.get('alternativeHeadline', ''),
         "description": data.get('description', ''),
-        "image": {
-            "@type": "ImageObject",
-            "url": data.get('image_url', ''),
-            "width": data.get('image_width', ''),
-            "height": data.get('image_height', '')
-        },
-        "author": {
-            "@type": "Person",
-            "name": "Roberto Serra",
-            "url": "https://www.roberto-serra.com/chi-sono-roberto-serra/",
-            "@id": "https://www.roberto-serra.com/chi-sono-roberto-serra/#person"
-        },
-        "interviewer": {
-            "@type": "Person",
-            "name": "Roberto Serra",
-            "url": "https://www.roberto-serra.com/chi-sono-roberto-serra/",
-            "@id": "https://www.roberto-serra.com/chi-sono-roberto-serra/#person"
-        },
-        "publisher": {
-            "@type": "Organization",
-            "name": "Roberto Serra SEO Agency",
-            "url": "https://www.roberto-serra.com/",
-            "logo": {
-                "@type": "ImageObject",
-                "url": "https://www.roberto-serra.com/wp-content/uploads/2022/07/logo-roberto-serra.png",
-                "width": 500,
-                "height": 132
-            }
-        },
-        "datePublished": data.get('datePublished', ''),
-        "dateModified": data.get('dateModified', ''),
-        "keywords": data.get('keywords', []),
+        "inLanguage": "it-IT",
+        "datePublished": normalize_iso_date(data.get('datePublished')),
+        "dateModified": normalize_iso_date(data.get('dateModified')),
+        "articleSection": series_name,
+        "keywords": keywords,
         "about": about_list,
         "isPartOf": {
             "@type": "CreativeWorkSeries",
-            "name": data.get('seriesName', 'SEO Confidential'),
-            "url": "https://www.roberto-serra.com/news-category/interviste/",
-            "@id": "https://www.roberto-serra.com/news-category/interviste/#series"
-        }
+            "@id": f"{SERIES_URL}#series",
+            "name": series_name,
+            "url": SERIES_URL,
+            "description": data.get('seriesDescription', ''),
+        },
+        "image": image,
+        "audio": {},
+        "author": AUTHOR_PERSON,
+        "interviewer": AUTHOR_PERSON,
+        "interviewee": {},
+        "publisher": PUBLISHER_ORG,
+        "articleBody": data.get('articleBody', ''),
     }
 
-    # Add Audio if present
-    if data.get('audio_url'):
+    # Rule 6: keep audio only when a valid absolute URL is present.
+    audio_url = (data.get('audio_url') or '').strip()
+    if audio_url.startswith(('http://', 'https://')):
         schema["audio"] = {
             "@type": "AudioObject",
-            "contentUrl": data['audio_url'],
+            "name": (data.get('audio_name') or data.get('headline') or '').strip(),
             "description": data.get('audio_description', ''),
-            "name": data.get('headline', ''), # Or specific audio title if extracted
-            "encodingFormat": "audio/mpeg"
+            "contentUrl": audio_url,
+            "encodingFormat": "audio/mpeg",
         }
 
-    # Add Interviewee (The main entity)
-    interviewee = data.get('interviewee', {})
-    if interviewee.get('name'):
-        # Construct a unique ID for the interviewee
-        person_id = f"{data.get('url', '')}#person-{interviewee['name'].lower().replace(' ', '-')}"
-        
+    # Rule 7: main entity of the interview.
+    interviewee = data.get('interviewee') or {}
+    if (interviewee.get('name') or '').strip():
         schema["interviewee"] = {
-             "@type": "Person",
-             "@id": person_id,
-             "name": interviewee.get('name'),
-             "description": interviewee.get('bio'),
-             "jobTitle": interviewee.get('jobTitle'),
-             "affiliation": {
-                 "@type": "Organization",
-                 "name": interviewee.get('company')
-             },
-             "image": interviewee.get('image_url'),
-             "sameAs": interviewee.get('socialLinks', [])
+            "@type": "Person",
+            "@id": (interviewee.get('entity_url') or '').strip() or _person_id(url, interviewee['name']),
+            "name": interviewee.get('name'),
+            "description": interviewee.get('bio'),
+            "jobTitle": interviewee.get('jobTitle'),
+            "affiliation": {"@type": "Organization", "name": interviewee.get('company')},
+            "image": interviewee.get('image_url'),
+            "sameAs": [s.strip() for s in interviewee.get('socialLinks', []) if (s or '').strip()],
         }
 
-    json_content = json.dumps(schema, indent=4)
+    schema = prune_empty(schema)
+    json_content = json.dumps(schema, indent=2, ensure_ascii=False)
     return f'<script type="application/ld+json">\n{json_content}\n</script>'
 
 
@@ -293,24 +388,29 @@ with st.sidebar:
         api_key = st.text_input("Google Gemini API Key", type="password")
         st.caption("To save permanently, create `.streamlit/secrets.toml` with `GEMINI_API_KEY = 'YOUR_KEY'`")
     
-    # 2. Model Persistence (config.json)
+    # 2. Model persistence: session_state (in-session) + best-effort config.json (cross-restart)
     CONFIG_FILE = "config.json"
-    
-    def load_config():
+
+    def load_last_model():
         if os.path.exists(CONFIG_FILE):
             try:
                 with open(CONFIG_FILE, "r") as f:
-                    return json.load(f)
-            except:
-                return {}
-        return {}
+                    return json.load(f).get("last_model")
+            except Exception:
+                return None
+        return None
 
-    def save_config(config):
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(config, f)
+    def save_last_model(model):
+        # Best effort: on read-only/ephemeral filesystems (cloud deploy) just skip.
+        try:
+            with open(CONFIG_FILE, "w") as f:
+                json.dump({"last_model": model}, f)
+        except Exception:
+            pass
 
-    config = load_config()
-    last_model = config.get("last_model")
+    if "last_model" not in st.session_state:
+        st.session_state["last_model"] = load_last_model()
+    last_model = st.session_state["last_model"]
 
     def get_available_models(api_key):
         if not api_key:
@@ -352,12 +452,12 @@ with st.sidebar:
         default_index = model_options.index(last_model)
         
     model_name = st.selectbox("Model", model_options, index=default_index)
-    
-    # Save if changed
+
+    # Persist selection (session + best-effort disk)
     if model_name != last_model:
-        config["last_model"] = model_name
-        save_config(config)
-        
+        st.session_state["last_model"] = model_name
+        save_last_model(model_name)
+
     st.info("Get your key from Google AI Studio.")
 
 # File Upload
@@ -396,9 +496,11 @@ if uploaded_file:
             final_data['keywords'] = ai_data.get('keywords', [])
             final_data['mentions'] = ai_data.get('mentions', [])
             final_data['seriesName'] = ai_data.get('seriesName', 'SEO Confidential')
-            
-            # Store in session state
+            final_data['seriesDescription'] = ai_data.get('seriesDescription', '')
+
+            # Store in session state; drop any stale generated output
             st.session_state['extracted_data'] = final_data
+            st.session_state.pop('json_output', None)
             st.success("Extraction Complete!")
 
 # Display & Edit Form
@@ -416,10 +518,14 @@ if 'extracted_data' in st.session_state:
         data['alternativeHeadline'] = st.text_input("Alternative Headline", data.get('alternativeHeadline', ''))
         data['description'] = st.text_area("Description", data.get('description', ''))
         data['url'] = st.text_input("Canonical URL", data.get('url', ''))
-        data['datePublished'] = st.text_input("Date Published", data.get('datePublished', ''))
-        data['dateModified'] = st.text_input("Date Modified", data.get('dateModified', ''))
+        data['datePublished'] = st.text_input("Date Published", data.get('datePublished', ''),
+                                               help="Formato ISO 8601, es. 2025-01-05T08:00:00+02:00")
+        data['dateModified'] = st.text_input("Date Modified", data.get('dateModified', ''),
+                                              help="Formato ISO 8601")
         data['seriesName'] = st.text_input("Series Name", data.get('seriesName', ''))
-        
+        data['seriesDescription'] = st.text_area("Series Description", data.get('seriesDescription', ''),
+                                                 help="Descrizione della rubrica (isPartOf.description)")
+
     with col2:
         st.markdown("### 🎙️ Media & Keywords")
         data['audio_url'] = st.text_input("Audio URL", data.get('audio_url', ''))
@@ -427,7 +533,7 @@ if 'extracted_data' in st.session_state:
         data['image_url'] = st.text_input("Image URL", data.get('image_url', ''))
         
         keywords_str = st.text_area("Keywords (comma separated)", ", ".join(data.get('keywords', [])))
-        data['keywords'] = [k.strip() for k in keywords_str.split(',')]
+        data['keywords'] = [k.strip() for k in keywords_str.split(',') if k.strip()]
         
     st.markdown("### 👤 Interviewee Details")
     int_col1, int_col2 = st.columns(2)
@@ -441,14 +547,40 @@ if 'extracted_data' in st.session_state:
     with int_col2:
         interviewee['bio'] = st.text_area("Bio", interviewee.get('bio', ''))
         socials_str = st.text_area("Social Links (comma separated)", ", ".join(interviewee.get('socialLinks', [])))
-        interviewee['socialLinks'] = [s.strip() for s in socials_str.split(',')]
+        interviewee['socialLinks'] = [s.strip() for s in socials_str.split(',') if s.strip()]
         interviewee['image_url'] = st.text_input("Interviewee Image URL", interviewee.get('image_url', ''))
-    
+
     data['interviewee'] = interviewee
-    
-    # Generate JSON
+
+    with st.expander("📝 Article Body (opzionale — incluso in articleBody)"):
+        data['articleBody'] = st.text_area(
+            "Article Body (plain text)", data.get('articleBody', ''),
+            height=200, label_visibility="collapsed",
+        )
+
+    # Persist edits so they survive reruns / generation
+    st.session_state['extracted_data'] = data
+
+    # --- Validation panel ---
     st.divider()
-    if st.button("Generate JSON-LD"):
-        json_output = generate_json_ld(data)
+    errors, warnings = validate_schema_data(data)
+    if errors:
+        st.error("**Da correggere prima di generare:**\n" + "\n".join(f"- {e}" for e in errors))
+    if warnings:
+        st.warning("**Avvisi (proprietà che verranno omesse):**\n" + "\n".join(f"- {w}" for w in warnings))
+    if not errors and not warnings:
+        st.success("Tutti i campi principali sono validi ✅")
+
+    # --- Generate JSON ---
+    if st.button("Generate JSON-LD", disabled=bool(errors), type="primary"):
+        st.session_state['json_output'] = generate_json_ld(data)
+
+    if st.session_state.get('json_output'):
         st.subheader("🎉 Final JSON-LD")
-        st.code(json_output, language='json')
+        st.code(st.session_state['json_output'], language='html')
+        st.download_button(
+            "⬇️ Scarica snippet",
+            data=st.session_state['json_output'],
+            file_name="schema-jsonld.html",
+            mime="text/html",
+        )
