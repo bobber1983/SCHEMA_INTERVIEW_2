@@ -1,0 +1,36 @@
+# --- Secrets & credenziali (MAI committare) ---
+.streamlit/secrets.toml
+*.key
+.env
+.env.*
+
+# --- Stato runtime dell'app ---
+config.json
+
+# --- Sistema operativo ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+ENV/
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+*.swp
+*~
