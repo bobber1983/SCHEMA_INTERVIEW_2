@@ -4,6 +4,7 @@ import json
 import google.generativeai as genai
 import datetime
 import os
+import requests
 from dateutil import parser
 from urllib.parse import urljoin, urlparse
 
@@ -62,15 +63,44 @@ def validate_and_fix_url(url, base_url):
         
     return url
 
-def extract_heuristics(soup):
+def fetch_html(url):
+    """
+    Fetch a live page's HTML. Returns the HTML string, or None after showing an error.
+    Works for server-rendered pages (e.g. WordPress); JS-rendered SPAs won't expose content.
+    """
+    if not url.startswith(('http://', 'https://')):
+        st.error("Inserisci un URL valido che inizi con http:// o https://")
+        return None
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; SchemaGenerator/1.0)"}
+        resp = requests.get(url, headers=headers, timeout=20)
+        resp.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        st.error(f"Errore nel recupero della pagina: {e}")
+        return None
+
+    ctype = resp.headers.get("Content-Type", "").lower()
+    if "html" not in ctype and "<html" not in resp.text[:2000].lower():
+        st.error(f"L'URL non restituisce una pagina HTML (Content-Type: {ctype or 'sconosciuto'}).")
+        return None
+
+    # requests defaults to ISO-8859-1 without a charset header, mangling accented chars.
+    if not resp.encoding or resp.encoding.lower() == "iso-8859-1":
+        resp.encoding = resp.apparent_encoding or resp.encoding
+    return resp.text
+
+def extract_heuristics(soup, base_url_hint=""):
     """
     Phase 1: Surgical Extraction of metadata available in DOM.
+    base_url_hint: the known page URL (when fetched by URL) used as canonical/base fallback.
     """
     data = {}
-    
+
     # 1. Basic Meta Tags
-    data['url'] = get_safe_attr(soup, 'link[rel="canonical"]', 'href') or get_safe_attr(soup, 'meta[property="og:url"]', 'content')
-    base_url = data['url'] # Use this as base for resolving relative links
+    data['url'] = (get_safe_attr(soup, 'link[rel="canonical"]', 'href')
+                   or get_safe_attr(soup, 'meta[property="og:url"]', 'content')
+                   or base_url_hint)
+    base_url = data['url'] or base_url_hint  # Use this as base for resolving relative links
     
     data['headline'] = get_safe_attr(soup, 'meta[property="og:title"]', 'content') or soup.title.string
     data['description'] = get_safe_attr(soup, 'meta[name="description"]', 'content') or get_safe_attr(soup, 'meta[property="og:description"]', 'content')
@@ -373,7 +403,7 @@ def generate_json_ld(data):
 # --- Main App UI ---
 
 st.title("🛠️ JSON-LD Schema Generator")
-st.markdown("Upload an HTML file to generate the schema.")
+st.markdown("Genera lo schema JSON-LD da un **URL** o da un **file HTML**.")
 
 # Sidebar
 # Sidebar
@@ -460,39 +490,54 @@ with st.sidebar:
 
     st.info("Get your key from Google AI Studio.")
 
-# File Upload
-uploaded_file = st.file_uploader("Upload HTML File", type=['html'])
+# --- Input: da URL o da file ---
+st.subheader("1. Sorgente")
+source = st.radio(
+    "Da dove prendo l'HTML?",
+    ["🔗 Da URL", "📄 Carica file HTML"],
+    horizontal=True,
+    label_visibility="collapsed",
+)
 
-if uploaded_file:
-    # Read file
-    html_content = uploaded_file.read().decode("utf-8")
-    soup = BeautifulSoup(html_content, 'html.parser')
-    
-    if st.button("Analyze & Extract"):
-        with st.spinner("Extracting Data..."):
-            # 1. Heuristics
-            heuristics = extract_heuristics(soup)
-            
-            # 2. AI Extraction
+source_url = ""
+uploaded_file = None
+
+if source == "🔗 Da URL":
+    source_url = st.text_input("URL della pagina", placeholder="https://www.roberto-serra.com/...")
+    ready = bool(source_url.strip())
+else:
+    uploaded_file = st.file_uploader("Upload HTML File", type=['html'])
+    ready = uploaded_file is not None
+
+if st.button("Analyze & Extract", type="primary", disabled=not ready):
+    with st.spinner("Recupero e analisi in corso..."):
+        # 1. Obtain HTML from the chosen source
+        if source == "🔗 Da URL":
+            html_content = fetch_html(source_url.strip())
+        else:
+            html_content = uploaded_file.read().decode("utf-8", errors="replace")
+
+        if html_content:
+            soup = BeautifulSoup(html_content, 'html.parser')
+
+            # 2. Heuristics (known URL used as canonical/base fallback)
+            heuristics = extract_heuristics(soup, base_url_hint=source_url.strip())
+
+            # 3. AI Extraction
             ai_data = {}
             if api_key:
                 clean_text = clean_html_for_ai(soup)
                 ai_data = extract_with_ai(clean_text, api_key, model_name, heuristics)
             else:
                 st.warning("No API Key provided. Skipping AI enrichment.")
-            
-            # 3. Merge Data
-            # Start with heuristics, update with AI (AI fills gaps or overrides if better)
+
+            # 4. Merge Data (start with heuristics, AI fills gaps)
             final_data = heuristics.copy()
-            
-            # Merge simple fields if missing in heuristics
+
             if not final_data.get('alternativeHeadline'):
                 final_data['alternativeHeadline'] = ai_data.get('alternativeHeadline', '')
-            
-            # Merge Interviewee
+
             final_data['interviewee'] = ai_data.get('interviewee', {})
-            
-            # Merge Keywords & Mentions
             final_data['keywords'] = ai_data.get('keywords', [])
             final_data['mentions'] = ai_data.get('mentions', [])
             final_data['seriesName'] = ai_data.get('seriesName', 'SEO Confidential')
