@@ -442,6 +442,12 @@ with st.sidebar:
         st.session_state["last_model"] = load_last_model()
     last_model = st.session_state["last_model"]
 
+    # Non-text variants we never want for JSON extraction.
+    EXCLUDE_MODEL = ("image", "tts", "embedding", "vision", "computer-use", "audio")
+    # Future-proof aliases preferred as defaults (won't get deprecated like pinned versions).
+    PREFERRED_MODELS = ["models/gemini-flash-latest", "models/gemini-pro-latest"]
+    FALLBACK_MODEL = "models/gemini-flash-latest"
+
     def get_available_models(api_key):
         if not api_key:
             return []
@@ -449,32 +455,34 @@ with st.sidebar:
             genai.configure(api_key=api_key)
             models = []
             for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    # Filter: User requested only >= 2.0
-                    if "gemini-2." in m.name or "gemini-3." in m.name: 
-                        models.append(m.name)
-            
-            # Fallback
-            if not models:
-                 for m in genai.list_models():
-                    if 'generateContent' in m.supported_generation_methods and "gemini" in m.name:
-                        models.append(m.name)
-            
-            # Sort models
-            models = sorted(models, reverse=True)
-            
-            # Prioritize gemini-2.5-pro if available
-            target_model = "models/gemini-2.5-pro"
-            if target_model in models:
-                models.remove(target_model)
-                models.insert(0, target_model)
-            
-            return models
-        except Exception as e:
-            # st.error(f"Error fetching models: {e}") # Suppress error on startup if key is invalid
-            return ["models/gemini-1.5-flash"] 
+                if 'generateContent' not in m.supported_generation_methods:
+                    continue
+                name = m.name
+                if any(x in name for x in EXCLUDE_MODEL):
+                    continue
+                if "gemini-2." in name or "gemini-3." in name or "latest" in name:
+                    models.append(name)
 
-    model_options = get_available_models(api_key) if api_key else ["models/gemini-1.5-flash"]
+            # Fallback: any gemini text model
+            if not models:
+                models = [m.name for m in genai.list_models()
+                          if 'generateContent' in m.supported_generation_methods
+                          and "gemini" in m.name
+                          and not any(x in m.name for x in EXCLUDE_MODEL)]
+
+            models = sorted(set(models), reverse=True)
+
+            # Surface future-proof aliases first (flash-latest as top default).
+            for pref in reversed(PREFERRED_MODELS):
+                if pref in models:
+                    models.remove(pref)
+                    models.insert(0, pref)
+            return models
+        except Exception:
+            # Suppress error on startup if the key is invalid.
+            return [FALLBACK_MODEL]
+
+    model_options = get_available_models(api_key) if api_key else [FALLBACK_MODEL]
     
     # Determine index for selectbox
     default_index = 0
