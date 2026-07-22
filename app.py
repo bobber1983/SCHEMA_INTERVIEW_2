@@ -4,12 +4,39 @@ import json
 import google.generativeai as genai
 import datetime
 import os
+import hmac
 import requests
 from dateutil import parser
 from urllib.parse import urljoin, urlparse
 
 # --- Configuration & Setup ---
 st.set_page_config(page_title="JSON-LD Schema Generator", layout="wide")
+
+# --- Access gate (shared password, protects the API key from abuse) ---
+def check_password():
+    """Return True once the user enters the correct shared password."""
+    if "APP_PASSWORD" not in st.secrets:
+        st.error("⚠️ APP_PASSWORD non configurata nei secrets: impostala per proteggere l'app.")
+        return False
+
+    if st.session_state.get("password_correct", False):
+        return True
+
+    def password_entered():
+        if hmac.compare_digest(st.session_state.get("password", ""), st.secrets["APP_PASSWORD"]):
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # don't keep the password in memory
+        else:
+            st.session_state["password_correct"] = False
+
+    st.title("🔒 Accesso riservato")
+    st.text_input("Password", type="password", on_change=password_entered, key="password")
+    if st.session_state.get("password_correct") is False:
+        st.error("😕 Password errata")
+    return False
+
+if not check_password():
+    st.stop()
 
 # --- Helper Functions ---
 
